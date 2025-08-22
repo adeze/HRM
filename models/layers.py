@@ -6,9 +6,63 @@ import torch.nn.functional as F
 
 try:
     from flash_attn_interface import flash_attn_func  # type: ignore[import]
+    _FLASH_ATTN_AVAILABLE = True
 except ImportError:
-    # Fallback to FlashAttention 2
-    from flash_attn import flash_attn_func  # type: ignore[import]
+    try:
+        # Fallback to FlashAttention 2
+        from flash_attn import flash_attn_func  # type: ignore[import]
+        _FLASH_ATTN_AVAILABLE = True
+    except ImportError:
+        # No FlashAttention available
+        _FLASH_ATTN_AVAILABLE = False
+        flash_attn_func = None
+
+
+def run_flash_attn(q, k, v, causal=False):
+    """
+    Flash attention with fallback to PyTorch scaled_dot_product_attention.
+    
+    Args:
+        q, k, v: Query, key, value tensors with shape [B, S, num_heads, head_dim]
+        causal: Whether to use causal mask
+        
+    Returns:
+        Attention output with shape [B, S, num_heads, head_dim]
+    """
+    if _FLASH_ATTN_AVAILABLE:
+        # Use FlashAttention if available
+        attn_output = flash_attn_func(q=q, k=k, v=v, causal=causal)
+        if isinstance(attn_output, tuple):  # fa2 and fa3 compatibility
+            attn_output = attn_output[0]
+        return attn_output
+    else:
+        # Fallback to PyTorch scaled_dot_product_attention for PyTorch >= 2.0
+        if hasattr(F, 'scaled_dot_product_attention'):
+            # Input shape: [B, S, num_heads, head_dim]
+            # scaled_dot_product_attention expects: [B, num_heads, S, head_dim]
+            B, S, num_heads, head_dim = q.shape
+            
+            # Transpose to [B, num_heads, S, head_dim]
+            q = q.transpose(1, 2)
+            k = k.transpose(1, 2)  
+            v = v.transpose(1, 2)
+            
+            attn_output = F.scaled_dot_product_attention(
+                q, k, v, 
+                is_causal=causal,
+                dropout_p=0.0
+            )
+            
+            # Transpose back to [B, S, num_heads, head_dim]
+            attn_output = attn_output.transpose(1, 2)
+            return attn_output
+        else:
+            # Manual attention for PyTorch < 2.0 (add comment for future implementation)
+            # TODO: Implement manual softmax+bmm fallback for PyTorch < 2.0
+            raise RuntimeError(
+                "FlashAttention not available and PyTorch < 2.0 detected. "
+                "Please install FlashAttention or upgrade to PyTorch >= 2.0"
+            )
 
 from models.common import trunc_normal_init_
 
@@ -127,9 +181,7 @@ class Attention(nn.Module):
             query, key = apply_rotary_pos_emb(query, key, cos, sin)
 
         # flash attn
-        attn_output = flash_attn_func(q=query, k=key, v=value, causal=self.causal)
-        if isinstance(attn_output, tuple):  # fa2 and fa3 compatibility
-            attn_output = attn_output[0]
+        attn_output = run_flash_attn(q=query, k=key, v=value, causal=self.causal)
 
         # attn_output: [batch_size, num_heads, seq_len, head_dim]
         attn_output = attn_output.view(batch_size, seq_len, self.output_size)  # type: ignore
