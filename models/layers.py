@@ -6,9 +6,50 @@ import torch.nn.functional as F
 
 try:
     from flash_attn_interface import flash_attn_func  # type: ignore[import]
+    _flash_attn_available = True
 except ImportError:
-    # Fallback to FlashAttention 2
-    from flash_attn import flash_attn_func  # type: ignore[import]
+    try:
+        # Fallback to FlashAttention 2
+        from flash_attn import flash_attn_func  # type: ignore[import]
+        _flash_attn_available = True
+    except ImportError:
+        # FlashAttention not available - use PyTorch fallback
+        _flash_attn_available = False
+        flash_attn_func = None
+
+
+def _flash_attn_fallback(q, k, v, causal=False, **kwargs):
+    """Fallback implementation using PyTorch's scaled_dot_product_attention"""
+    # q, k, v: [batch_size, seq_len, num_heads, head_dim]
+    # scaled_dot_product_attention expects: [batch_size, num_heads, seq_len, head_dim]
+    
+    batch_size, seq_len, num_heads, head_dim = q.shape
+    
+    # Transpose to [batch_size, num_heads, seq_len, head_dim]
+    q = q.transpose(1, 2)
+    k = k.transpose(1, 2)
+    v = v.transpose(1, 2)
+    
+    # Use PyTorch's scaled_dot_product_attention (available in PyTorch >= 2.0)
+    attn_output = F.scaled_dot_product_attention(
+        q, k, v, 
+        attn_mask=None,
+        dropout_p=0.0,
+        is_causal=causal
+    )
+    
+    # Transpose back to [batch_size, seq_len, num_heads, head_dim]
+    attn_output = attn_output.transpose(1, 2)
+    
+    return attn_output
+
+
+def run_flash_attn(q, k, v, causal=False, **kwargs):
+    """Wrapper function that uses FlashAttention if available, otherwise falls back to PyTorch implementation"""
+    if _flash_attn_available:
+        return flash_attn_func(q=q, k=k, v=v, causal=causal, **kwargs)
+    else:
+        return _flash_attn_fallback(q=q, k=k, v=v, causal=causal, **kwargs)
 
 from models.common import trunc_normal_init_
 
@@ -127,7 +168,7 @@ class Attention(nn.Module):
             query, key = apply_rotary_pos_emb(query, key, cos, sin)
 
         # flash attn
-        attn_output = flash_attn_func(q=query, k=key, v=value, causal=self.causal)
+        attn_output = run_flash_attn(q=query, k=key, v=value, causal=self.causal)
         if isinstance(attn_output, tuple):  # fa2 and fa3 compatibility
             attn_output = attn_output[0]
 

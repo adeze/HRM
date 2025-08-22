@@ -46,6 +46,37 @@ For Ampere or earlier GPUs, install FlashAttention 2
 pip3 install flash-attn
 ```
 
+### macOS / Apple Silicon Support 🍎
+
+The repository now supports macOS with Apple Silicon (M1/M2/M3) using Metal Performance Shaders (MPS):
+
+**Requirements:**
+- macOS with Apple Silicon
+- PyTorch >= 2.0 with MPS support
+- Python 3.8+
+
+**Installation:**
+```bash
+# Install PyTorch with MPS support (recommended for Apple Silicon)
+pip3 install torch torchvision torchaudio
+
+# Install Python dependencies
+pip install -r requirements.txt
+```
+
+**Important Notes:**
+- FlashAttention is CUDA-only and not available on macOS. The repository automatically falls back to PyTorch's `scaled_dot_product_attention` for CPU/MPS environments
+- Single-process training works on MPS (`python pretrain.py ...`)
+- Multi-process distributed training on macOS is limited and uses the `gloo` backend instead of `nccl`
+- For best performance on Apple Silicon, ensure PyTorch detects MPS: `python -c "import torch; print(torch.backends.mps.is_available())"`
+
+**Example (Single GPU equivalent on Apple Silicon):**
+```bash
+# Train Sudoku on Apple Silicon
+python dataset/build_sudoku_dataset.py --output-dir data/sudoku-extreme-1k-aug-1000 --subsample-size 1000 --num-aug 1000
+python pretrain.py data_path=data/sudoku-extreme-1k-aug-1000 epochs=20000 eval_interval=2000 global_batch_size=384 lr=7e-5 puzzle_emb_lr=7e-5 weight_decay=1.0 puzzle_emb_weight_decay=1.0
+```
+
 ## Install Python Dependencies 🐍
 
 ```bash
