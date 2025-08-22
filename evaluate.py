@@ -8,6 +8,10 @@ import torch.distributed as dist
 import pydantic
 from omegaconf import OmegaConf
 from pretrain import PretrainConfig, init_train_state, evaluate, create_dataloader
+from utils.device import get_device, choose_dist_backend
+
+# Global device detection
+DEVICE = get_device()
 
 
 class EvalConfig(pydantic.BaseModel):
@@ -23,13 +27,16 @@ def launch():
     WORLD_SIZE = 1
     # Initialize distributed training if in distributed environment (e.g. torchrun)
     if "LOCAL_RANK" in os.environ:
-        # Initialize distributed, default device and dtype
-        dist.init_process_group(backend="nccl")
+        # Initialize distributed with appropriate backend
+        backend = choose_dist_backend()
+        dist.init_process_group(backend=backend)
 
         RANK = dist.get_rank()
         WORLD_SIZE = dist.get_world_size()
 
-        torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+        # Only set CUDA device if CUDA is available
+        if torch.cuda.is_available():
+            torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
 
     with open(os.path.join(os.path.dirname(eval_cfg.checkpoint), "all_config.yaml"), "r") as f:
         config = PretrainConfig(**yaml.safe_load(f))
@@ -45,9 +52,9 @@ def launch():
     train_state = init_train_state(config, train_metadata, world_size=WORLD_SIZE)
     # Try unwrap torch.compile
     try:
-        train_state.model.load_state_dict(torch.load(eval_cfg.checkpoint, map_location="cuda"), assign=True)
+        train_state.model.load_state_dict(torch.load(eval_cfg.checkpoint, map_location=str(DEVICE)), assign=True)
     except:
-        train_state.model.load_state_dict({k.removeprefix("_orig_mod."): v for k, v in torch.load(eval_cfg.checkpoint, map_location="cuda").items()}, assign=True)
+        train_state.model.load_state_dict({k.removeprefix("_orig_mod."): v for k, v in torch.load(eval_cfg.checkpoint, map_location=str(DEVICE)).items()}, assign=True)
     
     train_state.step = 0
     ckpt_filename = os.path.basename(eval_cfg.checkpoint)

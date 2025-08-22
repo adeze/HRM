@@ -46,6 +46,22 @@ For Ampere or earlier GPUs, install FlashAttention 2
 pip3 install flash-attn
 ```
 
+### macOS / Apple Silicon Support 🍎
+
+HRM now supports Apple Silicon (MPS) and non-CUDA environments:
+
+- **MPS Support**: Automatically detects and uses Apple Silicon GPU acceleration when available
+- **FlashAttention Fallback**: Uses PyTorch's `scaled_dot_product_attention` when FlashAttention is unavailable
+- **PyTorch Requirements**: PyTorch >= 2.0 recommended for optimal fallback performance
+- **Distributed Backend**: Automatically selects `gloo` backend for non-CUDA environments
+
+**Single-process sanity check on MPS:**
+```bash
+OMP_NUM_THREADS=4 python pretrain.py epochs=1 global_batch_size=32
+```
+
+**Note**: For PyTorch < 2.0, additional manual attention fallback implementation may be required.
+
 ## Install Python Dependencies 🐍
 
 ```bash
